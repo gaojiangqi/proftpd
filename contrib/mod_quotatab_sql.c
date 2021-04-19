@@ -1,7 +1,7 @@
 /*
  * ProFTPD: mod_quotatab_sql -- a mod_quotatab sub-module for managing quota
  *                              data via SQL-based tables
- * Copyright (c) 2002-2017 TJ Saunders
+ * Copyright (c) 2002-2020 TJ Saunders
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -126,6 +126,11 @@ static int sqltab_create(quota_table_t *sqltab, void *ptr) {
    * files_in_used, files_out_used, files_xfer_used.
    */
 
+  /* NOTE: Per Issue #1149, we should NOT be adding the quotes to the
+   * text ourselves here.  It also makes the mod_quotatab_sql configuration
+   * inconsistent; the admin must quote these texts in the config for
+   * SELECTs, but not for INSERTs.
+   */
   pr_snprintf(tally_quota_name, 83, "'%s'",
     sqltab_get_name(tmp_pool, tally->name));
   tally_quota_name[82] = '\0';
@@ -237,7 +242,8 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
   sql_res = pr_module_call(sql_cmdtab->m, sql_cmdtab->handler, sql_cmd);
 
   /* Check the results. */
-  if (!sql_res || MODRET_ISERROR(sql_res)) {
+  if (sql_res == NULL ||
+      MODRET_ISERROR(sql_res)) {
     quotatab_log("error processing NamedQuery '%s'", select_query);
     destroy_pool(tmp_pool);
     return FALSE;
@@ -266,6 +272,11 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
       return FALSE;
     }
 
+    if (sql_data->nelts > 8) {
+      quotatab_log("warning: SQLNamedQuery '%s' returned more values than "
+        "expected (%d)", select_query, sql_data->nelts);
+    }
+
     /* Process each element returned. */
     memmove(tally->name, values[0], sizeof(tally->name));
 
@@ -280,6 +291,10 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
 
     } else if (strcasecmp(values[1], "all") == 0) {
       tally->quota_type = ALL_QUOTA;
+
+    } else {
+      quotatab_log("warning: SQLNamedQuery '%s' returned unknown/unsupported "
+        "quota type ('%s')", select_query, values[1]);
     }
 
     /* Check if this is the requested record, now that enough information
@@ -300,33 +315,40 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
     }
 
     tally->bytes_in_used = -1.0;
-    if (values[2])
+    if (values[2]) {
       tally->bytes_in_used = atof(values[2]);
+    }
 
     tally->bytes_out_used = -1.0;
-    if (values[3])
+    if (values[3]) {
       tally->bytes_out_used = atof(values[3]);
+    }
 
     tally->bytes_xfer_used = -1.0;
-    if (values[4])
+    if (values[4]) {
       tally->bytes_xfer_used = atof(values[4]);
+    }
 
     tally->files_in_used = 0;
-    if (values[5])
+    if (values[5]) {
       tally->files_in_used = atol(values[5]);
+    }
 
     tally->files_out_used = 0;
-    if (values[6])
+    if (values[6]) {
       tally->files_out_used = atol(values[6]);
+    }
 
     tally->files_xfer_used = 0;
-    if (values[7])
+    if (values[7]) {
       tally->files_xfer_used = atol(values[7]);
+    }
 
     destroy_pool(tmp_pool);
     return TRUE;
+  }
 
-  } else if (sqltab->tab_type == TYPE_LIMIT) {
+  if (sqltab->tab_type == TYPE_LIMIT) {
     quota_limit_t *limit = ptr;
     char **values = (char **) sql_data->elts;
 
@@ -349,6 +371,11 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
       return FALSE;
     }
 
+    if (sql_data->nelts > 10) {
+      quotatab_log("warning: SQLNamedQuery '%s' returned more values than "
+        "expected (%d)", select_query, sql_data->nelts);
+    }
+
     /* Process each element returned. */
     memmove(limit->name, values[0], sizeof(limit->name));
 
@@ -363,6 +390,10 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
 
     } else if (strcasecmp(values[1], "all") == 0) {
       limit->quota_type = ALL_QUOTA;
+
+    } else {
+      quotatab_log("warning: SQLNamedQuery '%s' returned unknown/unsupported "
+        "quota type ('%s')", select_query, values[1]);
     }
 
     /* Check if this is the requested record, now that enough information
@@ -387,6 +418,10 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
 
     } else if (strcasecmp(values[2], "true") == 0) {
       limit->quota_per_session = TRUE;
+
+    } else {
+      quotatab_log("warning: SQLNamedQuery '%s' returned unknown/unsupported "
+        "quota per-session value ('%s')", select_query, values[2]);
     }
 
     if (strcasecmp(values[3], "soft") == 0) {
@@ -394,31 +429,41 @@ static unsigned char sqltab_lookup(quota_table_t *sqltab, void *ptr,
 
     } else if (strcasecmp(values[3], "hard") == 0) {
       limit->quota_limit_type = HARD_LIMIT;
+
+    } else {
+      quotatab_log("warning: SQLNamedQuery '%s' returned unknown/unsupported "
+        "quota limit type ('%s')", select_query, values[3]);
     }
 
     limit->bytes_in_avail = -1.0;
-    if (values[4])
+    if (values[4]) {
       limit->bytes_in_avail = atof(values[4]);
+    }
 
     limit->bytes_out_avail = -1.0;
-    if (values[5])
+    if (values[5]) {
       limit->bytes_out_avail = atof(values[5]);
+    }
 
     limit->bytes_xfer_avail = -1.0;
-    if (values[6])
+    if (values[6]) {
       limit->bytes_xfer_avail = atof(values[6]);
+    }
 
     limit->files_in_avail = 0;
-    if (values[7])
+    if (values[7]) {
       limit->files_in_avail = atol(values[7]);
+    }
 
     limit->files_out_avail = 0;
-    if (values[8])
+    if (values[8]) {
       limit->files_out_avail = atol(values[8]);
+    }
 
     limit->files_xfer_avail = 0;
-    if (values[9])
+    if (values[9]) {
       limit->files_xfer_avail = atol(values[9]);
+    }
 
     destroy_pool(tmp_pool);
     return TRUE;

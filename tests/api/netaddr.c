@@ -1,6 +1,6 @@
 /*
  * ProFTPD - FTP server testsuite
- * Copyright (c) 2008-2020 The ProFTPD Project team
+ * Copyright (c) 2008-2021 The ProFTPD Project team
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -415,7 +415,8 @@ START_TEST (netaddr_fnmatch_test) {
   fail_unless(res == FALSE, "Expected FALSE, got %d", res);
 
   res = pr_netaddr_fnmatch(addr, "LOCAL*", flags);
-  if (getenv("TRAVIS") == NULL) {
+  if (getenv("CI") == NULL &&
+      getenv("TRAVIS") == NULL) {
     /* This test is sensitive the environment. */
     fail_unless(res == TRUE, "Expected TRUE, got %d", res);
   }
@@ -877,7 +878,8 @@ START_TEST (netaddr_get_dnsstr_test) {
    * return either "localhost" or "localhost.localdomain".  Perhaps even
    * other variations, although these should be the most common.
    */
-  if (getenv("TRAVIS") == NULL) {
+  if (getenv("CI") == NULL &&
+      getenv("TRAVIS") == NULL) {
     /* This test is sensitive the environment. */
     fail_unless(strcmp(res, "localhost") == 0 ||
                 strcmp(res, "localhost.localdomain") == 0,
@@ -1000,7 +1002,8 @@ START_TEST (netaddr_get_dnsstr_ipv6_test) {
    * return either "localhost" or "localhost.localdomain".  Perhaps even
    * other variations, although these should be the most common.
    */
-  if (getenv("TRAVIS") == NULL) {
+  if (getenv("CI") == NULL &&
+      getenv("TRAVIS") == NULL) {
     fail_unless(strcmp(res, "localhost") == 0 ||
                 strcmp(res, "localhost.localdomain") == 0 ||
                 strcmp(res, "localhost6") == 0 ||
@@ -1460,6 +1463,9 @@ Suite *tests_get_netaddr_suite(void) {
   tcase_add_test(testcase, netaddr_v4tov6_test);
   tcase_add_test(testcase, netaddr_disable_ipv6_test);
   tcase_add_test(testcase, netaddr_enable_ipv6_test);
+
+  /* Some of the DNS-related tests may take a little longer. */
+  tcase_set_timeout(testcase, 30);
 
   suite_add_tcase(suite, testcase);
   return suite;

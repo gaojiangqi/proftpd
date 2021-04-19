@@ -11,8 +11,8 @@ use File::Path qw(mkpath);
 use File::Spec;
 use IO::Handle;
 use IPC::Open3;
+use Net::Address::IP::Local;
 use POSIX qw(:fcntl_h);
-use Sys::HostAddr;
 
 use ProFTPD::TestSuite::FTP;
 use ProFTPD::TestSuite::Utils qw(:auth :config :running :test :testsuite :features);
@@ -2098,7 +2098,7 @@ sub extlog_remote_port {
     }
   };
   if ($@) {
-    $ex;
+    $ex = $@;
   }
 
   test_cleanup($setup->{log_file}, $ex);
@@ -6831,8 +6831,7 @@ sub extlog_vars_H_L_default_server_bug3620 {
   my ($port, $config_user, $config_group) = config_write($setup->{config_file},
     $config);
 
-  my $sysaddr = Sys::HostAddr->new();
-  my $real_addr = $sysaddr->main_ip();
+  my $real_addr = Net::Address::IP::Local->public_ipv4;
   my $real_port = ProFTPD::TestSuite::Utils::get_high_numbered_port();
   my $vhost_addr = '0.0.0.0';
 
@@ -11547,10 +11546,10 @@ sub extlog_preauth_var_u_bug3822 {
 
   # Stop server
   server_stop($pid_file);
-
   $self->assert_child_ok($pid);
 
-  my $config_user = (config_get_identity())[0];
+  $config_user = (config_get_identity())[0];
+
   # Now, read in the ExtendedLog, and see whether the %U variable were
   # properly written out.
   if (open(my $fh, "< $ext_log")) {

@@ -1,6 +1,6 @@
 /*
  * ProFTPD - mod_sftp
- * Copyright (c) 2008-2020 TJ Saunders
+ * Copyright (c) 2008-2021 TJ Saunders
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -728,7 +728,7 @@ MODRET set_sftpclientmatch(cmd_rec *cmd) {
       /* Don't forget to advance i past the value. */
       i++;
 
-    } else if (strncmp(cmd->argv[i], "sftpProtocolVersion", 20) == 0) {
+    } else if (strcmp(cmd->argv[i], "sftpProtocolVersion") == 0) {
       void *min_value, *max_value;
       char *ptr = NULL;
 
@@ -753,6 +753,19 @@ MODRET set_sftpclientmatch(cmd_rec *cmd) {
             "'sftpProtocolVersion' value ", cmd->argv[i+1],
             " must be between 1 and 6: ", strerror(errno), NULL));
         }
+
+#if !defined(PR_USE_NLS)
+        /* If NLS supported was enabled in the proftpd build, then we can
+         * support UTF8, and thus every other version of SFTP.  Otherwise, we
+         * can only support up to version 3.
+         */
+        if (protocol_version > 3) {
+          CONF_ERROR(cmd, pstrcat(cmd->tmp_pool,
+            "'sftpProtocolVersion' value ", cmd->argv[i+1],
+            " cannot be higher than 3, due to lack of UTF8 support "
+            "(requires --enable-nls)", NULL));
+        }
+#endif /* PR_USE_NLS */
 
         min_value = palloc(c->pool, sizeof(unsigned int));
         *((unsigned int *) min_value) = (unsigned int) protocol_version;
@@ -784,6 +797,19 @@ MODRET set_sftpclientmatch(cmd_rec *cmd) {
             " must be between 1 and 6: ", strerror(errno), NULL));
         }
 
+#if !defined(PR_USE_NLS)
+        /* If NLS supported was enabled in the proftpd build, then we can
+         * support UTF8, and thus every other version of SFTP.  Otherwise, we
+         * can only support up to version 3.
+         */
+        if (min_version > 3) {
+          CONF_ERROR(cmd, pstrcat(cmd->tmp_pool,
+            "'sftpProtocolVersion' value ", cmd->argv[i+1],
+            " cannot be higher than 3, due to lack of UTF8 support "
+            "(requires --enable-nls)", NULL));
+        }
+#endif /* PR_USE_NLS */
+
         min_value = palloc(c->pool, sizeof(unsigned int));
         *((unsigned int *) min_value) = (unsigned int) min_version;
 
@@ -805,6 +831,19 @@ MODRET set_sftpclientmatch(cmd_rec *cmd) {
             "'sftpProtocolVersion' value ", cmd->argv[i+1],
             " must be between 1 and 6: ", strerror(errno), NULL));
         }
+
+#if !defined(PR_USE_NLS)
+        /* If NLS supported was enabled in the proftpd build, then we can
+         * support UTF8, and thus every other version of SFTP.  Otherwise, we
+         * can only support up to version 3.
+         */
+        if (max_version > 3) {
+          CONF_ERROR(cmd, pstrcat(cmd->tmp_pool,
+            "'sftpProtocolVersion' value ", cmd->argv[i+1],
+            " cannot be higher than 3, due to lack of UTF8 support "
+            "(requires --enable-nls)", NULL));
+        }
+#endif /* PR_USE_NLS */
 
         max_value = palloc(c->pool, sizeof(unsigned int));
         *((unsigned int *) max_value) = (unsigned int) max_version;
@@ -1733,11 +1772,12 @@ static void sftp_postparse_ev(const void *event_data, void *user_data) {
   server_rec *s;
 
   /* Initialize OpenSSL. */
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
   OPENSSL_config(NULL);
-#endif /* prior to OpenSSL-1.1.x */
   ERR_load_crypto_strings();
   OpenSSL_add_all_algorithms();
+#endif /* prior to OpenSSL-1.1.x */
 
   c = find_config(main_server->conf, CONF_PARAM, "SFTPPassPhraseProvider",
     FALSE);
@@ -1993,7 +2033,13 @@ static int sftp_init(void) {
    *
    * For now, we only log if there is a difference.
    */
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
   openssl_version = SSLeay();
+#else
+  openssl_version = OpenSSL_version_num();
+#endif /* prior to OpenSSL-1.1.x */
 
   if (openssl_version != OPENSSL_VERSION_NUMBER) {
     int unexpected_version_mismatch = TRUE;
@@ -2009,10 +2055,18 @@ static int sftp_init(void) {
     }
 
     if (unexpected_version_mismatch == TRUE) {
+      const char *version_text;
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
+      version_text = SSLeay_version(SSLEAY_VERSION);
+#else
+      version_text = OpenSSL_version(OPENSSL_VERSION);
+#endif /* prior to OpenSSL-1.1.x */
+
       pr_log_pri(PR_LOG_WARNING, MOD_SFTP_VERSION
         ": compiled using OpenSSL version '%s' headers, but linked to "
-        "OpenSSL version '%s' library", OPENSSL_VERSION_TEXT,
-        SSLeay_version(SSLEAY_VERSION));
+        "OpenSSL version '%s' library", OPENSSL_VERSION_TEXT, version_text);
     }
   }
 

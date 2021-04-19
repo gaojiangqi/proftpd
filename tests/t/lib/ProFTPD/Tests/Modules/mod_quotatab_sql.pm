@@ -1299,7 +1299,7 @@ EOS
     ScoreboardFile => $scoreboard_file,
     SystemLog => $log_file,
     TraceLog => $log_file,
-    Trace => 'DEFAULT:10',
+    Trace => 'DEFAULT:10 jot:30 sql:20',
 
     DefaultChdir => '~',
 
@@ -2917,17 +2917,16 @@ EOS
           $client2->response_msg());
       }
 
-      my $buf = "Hello, World\n";
+      $buf = "Hello, World\n";
       $conn->write($buf, length($buf), 25);
       eval { $conn->close() };
 
-      my $resp_code = $client2->response_code();
-      my $resp_msg = $client2->response_msg();
+      $resp_code = $client2->response_code();
+      $resp_msg = $client2->response_msg();
       $self->assert_transfer_ok($resp_code, $resp_msg);
 
       $client2->quit();
     };
-
     if ($@) {
       $ex = $@;
     }

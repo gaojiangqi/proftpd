@@ -29,7 +29,7 @@
 
 #ifdef PR_USE_TRACE
 
-#define TRACE_BUFFER_SIZE		(PR_TUNABLE_BUFFER_SIZE * 4)
+#define TRACE_BUFFER_SIZE		(PR_TUNABLE_BUFFER_SIZE * 8)
 
 static int trace_logfd = -1;
 static unsigned long trace_opts = PR_TRACE_OPT_DEFAULT;
@@ -405,7 +405,6 @@ int pr_trace_set_file(const char *path) {
 }
 
 int pr_trace_set_levels(const char *channel, int min_level, int max_level) {
-
   if (channel == NULL) {
     if (trace_tab == NULL) {
       errno = EINVAL;

@@ -1049,6 +1049,26 @@ my $TESTS = {
     test_class => [qw(forking rootprivs sftp ssh2)],
   },
 
+  sftp_auth_logging_bad_password_issue693 => {
+    order => ++$order,
+    test_class => [qw(forking sftp ssh2)],
+  },
+
+  sftp_auth_logging_bad_password_max_login_attempts_issue693 => {
+    order => ++$order,
+    test_class => [qw(forking sftp ssh2)],
+  },
+
+  sftp_auth_logging_publickey_then_password_issue693 => {
+    order => ++$order,
+    test_class => [qw(forking sftp ssh2)],
+  },
+
+  sftp_auth_logging_publickey_then_password_max_login_attempts_issue693 => {
+    order => ++$order,
+    test_class => [qw(forking sftp ssh2)],
+  },
+
   sftp_config_max_login_attempts_via_password => {
     order => ++$order,
     test_class => [qw(forking sftp ssh2)],
@@ -1092,6 +1112,11 @@ my $TESTS = {
   sftp_config_client_match => {
     order => ++$order,
     test_class => [qw(forking ssh2)],
+  },
+
+  sftp_config_client_match_no_matching_protocol_version_issue1200 => {
+    order => ++$order,
+    test_class => [qw(bug feat_nls forking ssh2)],
   },
 
   sftp_config_allowoverwrite => {
@@ -2144,8 +2169,8 @@ sub ssh2_connect_bad_version_unsupported_proto_version {
 
   # Stop server
   server_stop($setup->{pid_file});
-
   $self->assert_child_ok($pid);
+
   test_cleanup($setup->{log_file}, $ex);
 }
 
@@ -34121,38 +34146,7 @@ sub sftp_config_client_alive {
 sub sftp_config_client_match {
   my $self = shift;
   my $tmpdir = $self->{tmpdir};
-
-  my $config_file = "$tmpdir/sftp.conf";
-  my $pid_file = File::Spec->rel2abs("$tmpdir/sftp.pid");
-  my $scoreboard_file = File::Spec->rel2abs("$tmpdir/sftp.scoreboard");
-
-  my $log_file = test_get_logfile();
-
-  my $auth_user_file = File::Spec->rel2abs("$tmpdir/sftp.passwd");
-  my $auth_group_file = File::Spec->rel2abs("$tmpdir/sftp.group");
-
-  my $user = 'proftpd';
-  my $passwd = 'test';
-  my $group = 'ftpd';
-  my $home_dir = File::Spec->rel2abs($tmpdir);
-  my $uid = 500;
-  my $gid = 500;
-
-  # Make sure that, if we're running as root, that the home directory has
-  # permissions/privs set for the account we create
-  if ($< == 0) {
-    unless (chmod(0755, $home_dir)) {
-      die("Can't set perms on $home_dir to 0755: $!");
-    }
-
-    unless (chown($uid, $gid, $home_dir)) {
-      die("Can't set owner of $home_dir to $uid/$gid: $!");
-    }
-  }
-
-  auth_user_write($auth_user_file, $user, $passwd, $uid, $gid, $home_dir,
-    '/bin/bash');
-  auth_group_write($auth_group_file, $group, $gid, $user);
+  my $setup = test_setup($tmpdir, 'sftp');
 
   my $rsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_rsa_key');
   my $dsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_dsa_key');
@@ -34161,14 +34155,14 @@ sub sftp_config_client_match {
   my $banner_pattern = 'SFTP_UnitTest \\\\(Perl\\\\)';
 
   my $config = {
-    PidFile => $pid_file,
-    ScoreboardFile => $scoreboard_file,
-    SystemLog => $log_file,
-    TraceLog => $log_file,
-    Trace => 'DEFAULT:10 ssh2:20 sftp:20 scp:20',
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'ssh2:30 sftp:30',
 
-    AuthUserFile => $auth_user_file,
-    AuthGroupFile => $auth_group_file,
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
 
     IfModules => {
       'mod_delay.c' => {
@@ -34177,7 +34171,7 @@ sub sftp_config_client_match {
 
       'mod_sftp.c' => [
         "SFTPEngine on",
-        "SFTPLog $log_file",
+        "SFTPLog $setup->{log_file}",
         "SFTPHostKey $rsa_host_key",
         "SFTPHostKey $dsa_host_key",
 
@@ -34186,7 +34180,8 @@ sub sftp_config_client_match {
     },
   };
 
-  my ($port, $config_user, $config_group) = config_write($config_file, $config);
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
 
   # Open pipes, for use between the parent and child processes.  Specifically,
   # the child will indicate when it's done with its test by writing a message
@@ -34218,7 +34213,7 @@ sub sftp_config_client_match {
         die("Can't connect to SSH2 server: [$err_name] ($err_code) $err_str");
       }
 
-      unless ($ssh2->auth_password($user, $passwd)) {
+      unless ($ssh2->auth_password($setup->{user}, $setup->{passwd})) {
         my ($err_code, $err_name, $err_str) = $ssh2->error();
         die("Can't login to SSH2 server: [$err_name] ($err_code) $err_str");
       }
@@ -34236,7 +34231,6 @@ sub sftp_config_client_match {
       $sftp = undef;
       $ssh2->disconnect();
     };
-
     if ($@) {
       $ex = $@;
     }
@@ -34245,7 +34239,7 @@ sub sftp_config_client_match {
     $wfh->flush();
 
   } else {
-    eval { server_wait($config_file, $rfh) };
+    eval { server_wait($setup->{config_file}, $rfh) };
     if ($@) {
       warn($@);
       exit 1;
@@ -34255,18 +34249,145 @@ sub sftp_config_client_match {
   }
 
   # Stop server
-  server_stop($pid_file);
-
+  server_stop($setup->{pid_file});
   $self->assert_child_ok($pid);
 
-  if ($ex) {
-    test_append_logfile($log_file, $ex);
-    unlink($log_file);
+  test_cleanup($setup->{log_file}, $ex);
+}
 
-    die($ex);
+sub sftp_config_client_match_no_matching_protocol_version_issue1200 {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+  my $setup = test_setup($tmpdir, 'sftp');
+
+  my $rsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_rsa_key');
+  my $dsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_dsa_key');
+
+  my $banner = 'SFTP_UnitTest';
+  my $banner_pattern = 'SFTP_UnitTest';
+
+  my $config = {
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'ssh2:30 sftp:30',
+
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
+
+    IfModules => {
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+
+      'mod_sftp.c' => [
+        "SFTPEngine on",
+        "SFTPLog $setup->{log_file}",
+        "SFTPHostKey $rsa_host_key",
+        "SFTPHostKey $dsa_host_key",
+
+        "SFTPClientMatch \"^$banner_pattern\$\" sftpProtocolVersion 6",
+      ],
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
   }
 
-  unlink($log_file);
+  require Net::SSH2;
+
+  my $ex;
+
+  # Ignore SIGPIPE
+  local $SIG{PIPE} = sub { };
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      my $ssh2 = Net::SSH2->new();
+      $ssh2->banner($banner);
+
+      sleep(1);
+
+      unless ($ssh2->connect('127.0.0.1', $port)) {
+        my ($err_code, $err_name, $err_str) = $ssh2->error();
+        die("Can't connect to SSH2 server: [$err_name] ($err_code) $err_str");
+      }
+
+      unless ($ssh2->auth_password($setup->{user}, $setup->{passwd})) {
+        my ($err_code, $err_name, $err_str) = $ssh2->error();
+        die("Can't login to SSH2 server: [$err_name] ($err_code) $err_str");
+      }
+
+      my $sftp = $ssh2->sftp();
+      if ($sftp) {
+        die("Unexpectedly able to use SFTP");
+      }
+
+      $ssh2->disconnect();
+    };
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($setup->{config_file}, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($setup->{pid_file});
+  $self->assert_child_ok($pid);
+
+  eval {
+    if (open(my $fh, "< $setup->{log_file}")) {
+      my $ok = 0;
+
+      while (my $line = <$fh>) {
+        chomp($line);
+
+        if ($ENV{TEST_VERBOSE}) {
+          print STDERR "# $line\n";
+        }
+
+        if ($line =~ /Unable to use requested SFTP protocol version/) {
+          $ok = 1;
+          last;
+        }
+      }
+
+      close($fh);
+
+      $self->assert($ok, test_msg("Did not see expected mod_sftp log message"));
+
+    } else {
+      die("Can't read $setup->{log_file}: $!");
+    }
+  };
+  if ($@) {
+    $ex = $@;
+  }
+
+  test_cleanup($setup->{log_file}, $ex);
 }
 
 sub sftp_config_createhome {
@@ -36436,6 +36557,636 @@ EOC
   unlink($log_file);
 }
 
+sub sftp_auth_logging_bad_password_issue693 {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+  my $setup = test_setup($tmpdir, 'sftp');
+
+  my $rsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_rsa_key');
+  my $dsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_dsa_key');
+
+  my $rsa_priv_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key');
+  my $rsa_pub_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key.pub');
+
+  my $config = {
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'auth:20 ssh2:20 sftp:20 scp:20',
+
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
+
+    # Note that this test looks at the generated logging for verifying the
+    # behavior, thus we set the DebugLevel appropriately.
+    DebugLevel => 5,
+
+    IfModules => {
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+
+      'mod_sftp.c' => [
+        "SFTPEngine on",
+        "SFTPLog $setup->{log_file}",
+        "SFTPHostKey $rsa_host_key",
+        "SFTPHostKey $dsa_host_key",
+      ],
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  require Net::SSH2;
+
+  my $ex;
+
+  # Ignore SIGPIPE
+  local $SIG{PIPE} = sub { };
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      sleep(1);
+
+      my $ssh2 = Net::SSH2->new();
+
+      unless ($ssh2->connect('127.0.0.1', $port)) {
+        my ($err_code, $err_name, $err_str) = $ssh2->error();
+        die("Can't connect to SSH2 server: [$err_name] ($err_code) $err_str");
+      }
+
+      if ($ssh2->auth_password($setup->{user}, 'BADPASSWORD')) {
+        die("Login succeeded unexpectedly");
+      }
+
+      $ssh2->disconnect();
+    };
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($setup->{config_file}, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($setup->{pid_file});
+  $self->assert_child_ok($pid);
+
+  eval {
+    if (open(my $fh, "< $setup->{log_file}")) {
+      my $mod_auth_failed_seen = 0;
+      my $mod_auth_ignoring_seen = 0;
+      my $log_cmd_seen = 0;
+
+      while (my $line = <$fh>) {
+        chomp($line);
+
+        if ($ENV{TEST_VERBOSE}) {
+          print STDERR "# $line\n";
+        }
+
+        if ($line =~ /auth:\d+.*mod_auth handling failed login for user/) {
+          $mod_auth_failed_seen++;
+        }
+
+        if ($line =~ /auth:\d+.*ignoring non-fatal .*? auth attempt for user/) {
+          $mod_auth_ignoring_seen++;
+        }
+
+        if ($line =~ /dispatching LOG_CMD_ERR command .*PASS.* to mod_auth$/) {
+          $log_cmd_seen++;
+        }
+      }
+
+      close($fh);
+
+      my $expected = 1;
+      $self->assert($log_cmd_seen == $expected,
+        test_msg("Expected $expected LOG_CMD_ERR PASS messages, saw $log_cmd_seen"));
+
+      $expected = 0;
+      $self->assert($mod_auth_failed_seen == $expected,
+        test_msg("Expected $expected mod_auth 'handling failed login' messages, saw $mod_auth_failed_seen"));
+
+      $expected = 1;
+      $self->assert($mod_auth_ignoring_seen == $expected,
+        test_msg("Expected $expected mod_auth 'ignoring non-fatal auth attempt' messages, saw $mod_auth_ignoring_seen"));
+
+    } else {
+      die("Can't read $setup->{log_file}: $!");
+    }
+  };
+  if ($@) {
+    $ex = $@;
+  }
+
+  test_cleanup($setup->{log_file}, $ex);
+}
+
+sub sftp_auth_logging_bad_password_max_login_attempts_issue693 {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+  my $setup = test_setup($tmpdir, 'sftp');
+
+  my $rsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_rsa_key');
+  my $dsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_dsa_key');
+
+  my $rsa_priv_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key');
+  my $rsa_pub_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key.pub');
+
+  my $config = {
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'auth:20 ssh2:20 sftp:20 scp:20',
+
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
+
+    # Note that we specifically want 2 here, to test the handling of the
+    # initial non-fatal attempt, and the second fatal
+    # MaxLoginAttempts-exceeding attempt.
+    MaxLoginAttempts => 2,
+
+    # Note that this test looks at the generated logging for verifying the
+    # behavior, thus we set the DebugLevel appropriately.
+    DebugLevel => 5,
+
+    IfModules => {
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+
+      'mod_sftp.c' => [
+        "SFTPEngine on",
+        "SFTPLog $setup->{log_file}",
+        "SFTPHostKey $rsa_host_key",
+        "SFTPHostKey $dsa_host_key",
+      ],
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  require Net::SSH2;
+
+  my $ex;
+
+  # Ignore SIGPIPE
+  local $SIG{PIPE} = sub { };
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      sleep(1);
+
+      my $ssh2 = Net::SSH2->new();
+
+      unless ($ssh2->connect('127.0.0.1', $port)) {
+        my ($err_code, $err_name, $err_str) = $ssh2->error();
+        die("Can't connect to SSH2 server: [$err_name] ($err_code) $err_str");
+      }
+
+      for (my $i = 0; $i < 3; $i++) {
+        if ($ssh2->auth_password($setup->{user}, 'BADPASSWORD')) {
+          die("Login succeeded unexpectedly");
+        }
+      }
+
+      $ssh2->disconnect();
+    };
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($setup->{config_file}, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($setup->{pid_file});
+  $self->assert_child_ok($pid);
+
+  eval {
+    if (open(my $fh, "< $setup->{log_file}")) {
+      my $mod_auth_failed_seen = 0;
+      my $mod_auth_ignoring_seen = 0;
+      my $log_cmd_seen = 0;
+
+      while (my $line = <$fh>) {
+        chomp($line);
+
+        if ($ENV{TEST_VERBOSE}) {
+          print STDERR "# $line\n";
+        }
+
+        if ($line =~ /auth:\d+.*mod_auth handling failed login for user/) {
+          $mod_auth_failed_seen++;
+        }
+
+        if ($line =~ /auth:\d+.*ignoring non-fatal .*? auth attempt for user/) {
+          $mod_auth_ignoring_seen++;
+        }
+
+        if ($line =~ /dispatching LOG_CMD_ERR command .*PASS.* to mod_auth$/) {
+          $log_cmd_seen++;
+        }
+      }
+
+      close($fh);
+
+      my $expected = 3;
+      $self->assert($log_cmd_seen == $expected,
+        test_msg("Expected $expected LOG_CMD_ERR PASS messages, saw $log_cmd_seen"));
+
+      $expected = 1;
+      $self->assert($mod_auth_failed_seen == $expected,
+        test_msg("Expected $expected mod_auth 'handling failed login' messages, saw $mod_auth_failed_seen"));
+
+      $expected = 2;
+      $self->assert($mod_auth_ignoring_seen == $expected,
+        test_msg("Expected $expected mod_auth 'ignoring non-fatal auth attempt' messages, saw $mod_auth_ignoring_seen"));
+
+    } else {
+      die("Can't read $setup->{log_file}: $!");
+    }
+  };
+  if ($@) {
+    $ex = $@;
+  }
+
+  test_cleanup($setup->{log_file}, $ex);
+}
+
+sub sftp_auth_logging_publickey_then_password_issue693 {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+  my $setup = test_setup($tmpdir, 'sftp');
+
+  my $rsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_rsa_key');
+  my $dsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_dsa_key');
+
+  my $rsa_priv_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key');
+  my $rsa_pub_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key.pub');
+
+  # Note that we deliberately omit/skip the provisioning of the authorized_keys
+  # file, so that the publickey auth attempt will fail.
+
+  my $config = {
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'auth:20 ssh2:20 sftp:20 scp:20',
+
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
+
+    # Note that this test looks at the generated logging for verifying the
+    # behavior, thus we set the DebugLevel appropriately.
+    DebugLevel => 5,
+
+    IfModules => {
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+
+      'mod_sftp.c' => [
+        "SFTPEngine on",
+        "SFTPLog $setup->{log_file}",
+        "SFTPHostKey $rsa_host_key",
+        "SFTPHostKey $dsa_host_key",
+        "SFTPAuthorizedUserKeys file:~/.authorized_keys",
+      ],
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  require Net::SSH2;
+
+  my $ex;
+
+  # Ignore SIGPIPE
+  local $SIG{PIPE} = sub { };
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      sleep(1);
+
+      my $ssh2 = Net::SSH2->new();
+      unless ($ssh2->connect('127.0.0.1', $port)) {
+        my ($err_code, $err_name, $err_str) = $ssh2->error();
+        die("Can't connect to SSH2 server: [$err_name] ($err_code) $err_str");
+      }
+
+      if ($ssh2->auth_publickey($setup->{user}, $rsa_pub_key, $rsa_priv_key)) {
+        die("Publickey login succeeded unexpectedly");
+      }
+
+      $ssh2->disconnect();
+    };
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($setup->{config_file}, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($setup->{pid_file});
+  $self->assert_child_ok($pid);
+
+  eval {
+    if (open(my $fh, "< $setup->{log_file}")) {
+      my $mod_auth_failed_seen = 0;
+      my $mod_auth_ignoring_seen = 0;
+      my $log_cmd_seen = 0;
+
+      while (my $line = <$fh>) {
+        chomp($line);
+
+        if ($ENV{TEST_VERBOSE}) {
+          print STDERR "# $line\n";
+        }
+
+        if ($line =~ /auth:\d+.*mod_auth handling failed login for user/) {
+          $mod_auth_failed_seen++;
+        }
+
+        if ($line =~ /auth:\d+.*ignoring non-fatal .*? auth attempt for user/) {
+          $mod_auth_ignoring_seen++;
+        }
+
+        if ($line =~ /dispatching LOG_CMD_ERR command .*PASS.* to mod_auth$/) {
+          $log_cmd_seen++;
+        }
+      }
+
+      close($fh);
+
+      # For publickey authentication, two USERAUTH requests are needed: first
+      # without signature, to validate that the server accepts the publickey
+      # algorithm, followed by a USERAUTH request with the signature.  Thus
+      # why there will be two "fake" LOG_CMD_ERR PASS messages for a failed
+      # publickey attempt.  Note that a successful publickey login attempt
+      # would generate only one fake LOG_CMD_ERR PASS log message.
+
+      my $expected = 2;
+      $self->assert($log_cmd_seen == $expected,
+        test_msg("Expected $expected LOG_CMD_ERR PASS messages, saw $log_cmd_seen"));
+
+      $expected = 0;
+      $self->assert($mod_auth_failed_seen == $expected,
+        test_msg("Expected $expected mod_auth 'handling failed login' messages, saw $mod_auth_failed_seen"));
+
+      $expected = 2;
+      $self->assert($mod_auth_ignoring_seen == $expected,
+        test_msg("Expected $expected mod_auth 'ignoring non-fatal auth attempt' messages, saw $mod_auth_ignoring_seen"));
+
+    } else {
+      die("Can't read $setup->{log_file}: $!");
+    }
+  };
+  if ($@) {
+    $ex = $@;
+  }
+
+  test_cleanup($setup->{log_file}, $ex);
+}
+
+sub sftp_auth_logging_publickey_then_password_max_login_attempts_issue693 {
+  my $self = shift;
+  my $tmpdir = $self->{tmpdir};
+  my $setup = test_setup($tmpdir, 'sftp');
+
+  my $rsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_rsa_key');
+  my $dsa_host_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/ssh_host_dsa_key');
+
+  my $rsa_priv_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key');
+  my $rsa_pub_key = File::Spec->rel2abs('t/etc/modules/mod_sftp/test_rsa_key.pub');
+
+  # Note that we deliberately omit/skip the provisioning of the authorized_keys
+  # file, so that the publickey auth attempt will fail.
+
+  my $config = {
+    PidFile => $setup->{pid_file},
+    ScoreboardFile => $setup->{scoreboard_file},
+    SystemLog => $setup->{log_file},
+    TraceLog => $setup->{log_file},
+    Trace => 'auth:20 ssh2:20 sftp:20 scp:20',
+
+    AuthUserFile => $setup->{auth_user_file},
+    AuthGroupFile => $setup->{auth_group_file},
+
+    # Note that we specifically want 2 here, to test the handling of the
+    # initial non-fatal attempt, and the second fatal
+    # MaxLoginAttempts-exceeding attempt.
+    MaxLoginAttempts => 2,
+
+    # Note that this test looks at the generated logging for verifying the
+    # behavior, thus we set the DebugLevel appropriately.
+    DebugLevel => 5,
+
+    IfModules => {
+      'mod_delay.c' => {
+        DelayEngine => 'off',
+      },
+
+      'mod_sftp.c' => [
+        "SFTPEngine on",
+        "SFTPLog $setup->{log_file}",
+        "SFTPHostKey $rsa_host_key",
+        "SFTPHostKey $dsa_host_key",
+        "SFTPAuthorizedUserKeys file:~/.authorized_keys",
+      ],
+    },
+  };
+
+  my ($port, $config_user, $config_group) = config_write($setup->{config_file},
+    $config);
+
+  # Open pipes, for use between the parent and child processes.  Specifically,
+  # the child will indicate when it's done with its test by writing a message
+  # to the parent.
+  my ($rfh, $wfh);
+  unless (pipe($rfh, $wfh)) {
+    die("Can't open pipe: $!");
+  }
+
+  require Net::SSH2;
+
+  my $ex;
+
+  # Ignore SIGPIPE
+  local $SIG{PIPE} = sub { };
+
+  # Fork child
+  $self->handle_sigchld();
+  defined(my $pid = fork()) or die("Can't fork: $!");
+  if ($pid) {
+    eval {
+      sleep(1);
+
+      my $ssh2 = Net::SSH2->new();
+      unless ($ssh2->connect('127.0.0.1', $port)) {
+        my ($err_code, $err_name, $err_str) = $ssh2->error();
+        die("Can't connect to SSH2 server: [$err_name] ($err_code) $err_str");
+      }
+
+      for (my $i = 0; $i < 3; $i++) {
+        if ($ssh2->auth_publickey($setup->{user}, $rsa_pub_key, $rsa_priv_key)) {
+          die("Publickey login succeeded unexpectedly");
+        }
+      }
+
+      $ssh2->disconnect();
+    };
+    if ($@) {
+      $ex = $@;
+    }
+
+    $wfh->print("done\n");
+    $wfh->flush();
+
+  } else {
+    eval { server_wait($setup->{config_file}, $rfh) };
+    if ($@) {
+      warn($@);
+      exit 1;
+    }
+
+    exit 0;
+  }
+
+  # Stop server
+  server_stop($setup->{pid_file});
+  $self->assert_child_ok($pid);
+
+  eval {
+    if (open(my $fh, "< $setup->{log_file}")) {
+      my $mod_auth_failed_seen = 0;
+      my $mod_auth_ignoring_seen = 0;
+      my $log_cmd_seen = 0;
+
+      while (my $line = <$fh>) {
+        chomp($line);
+
+        if ($ENV{TEST_VERBOSE}) {
+          print STDERR "# $line\n";
+        }
+
+        if ($line =~ /auth:\d+.*mod_auth handling failed login for user/) {
+          $mod_auth_failed_seen++;
+        }
+
+        if ($line =~ /auth:\d+.*ignoring non-fatal .*? auth attempt for user/) {
+          $mod_auth_ignoring_seen++;
+        }
+
+        if ($line =~ /dispatching LOG_CMD_ERR command .*PASS.* to mod_auth$/) {
+          $log_cmd_seen++;
+        }
+      }
+
+      close($fh);
+
+      # For publickey authentication, two USERAUTH requests are needed: first
+      # without signature, to validate that the server accepts the publickey
+      # algorithm, followed by a USERAUTH request with the signature.  Thus
+      # why there will be two "fake" LOG_CMD_ERR PASS messages for a failed
+      # publickey attempt.  Note that a successful publickey login attempt
+      # would generate only one fake LOG_CMD_ERR PASS log message.
+
+      my $expected = 5;
+      $self->assert($log_cmd_seen == $expected,
+        test_msg("Expected $expected LOG_CMD_ERR PASS messages, saw $log_cmd_seen"));
+
+      $expected = 1;
+      $self->assert($mod_auth_failed_seen == $expected,
+        test_msg("Expected $expected mod_auth 'handling failed login' messages, saw $mod_auth_failed_seen"));
+
+      $expected = 4;
+      $self->assert($mod_auth_ignoring_seen == $expected,
+        test_msg("Expected $expected mod_auth 'ignoring non-fatal auth attempt' messages, saw $mod_auth_ignoring_seen"));
+
+    } else {
+      die("Can't read $setup->{log_file}: $!");
+    }
+  };
+  if ($@) {
+    $ex = $@;
+  }
+
+  test_cleanup($setup->{log_file}, $ex);
+}
+
 sub sftp_config_max_login_attempts_via_password {
   my $self = shift;
   my $tmpdir = $self->{tmpdir};
@@ -36452,11 +37203,15 @@ sub sftp_config_max_login_attempts_via_password {
     ScoreboardFile => $setup->{scoreboard_file},
     SystemLog => $setup->{log_file},
     TraceLog => $setup->{log_file},
-    Trace => 'DEFAULT:10 ssh2:20 sftp:20 scp:20',
+    Trace => 'auth:20 ssh2:20 sftp:20 scp:20',
 
     AuthUserFile => $setup->{auth_user_file},
     AuthGroupFile => $setup->{auth_group_file},
     MaxLoginAttempts => 1,
+
+    # Note that this test looks at the generated logging for verifying the
+    # behavior, thus we set the DebugLevel appropriately.
+    DebugLevel => 5,
 
     IfModules => {
       'mod_delay.c' => {
@@ -36605,11 +37360,15 @@ sub sftp_config_max_login_attempts_via_publickey {
     ScoreboardFile => $setup->{scoreboard_file},
     SystemLog => $setup->{log_file},
     TraceLog => $setup->{log_file},
-    Trace => 'DEFAULT:10 ssh2:20 sftp:20 scp:20',
+    Trace => 'auth:20 ssh2:20 sftp:20 scp:20',
 
     AuthUserFile => $setup->{auth_user_file},
     AuthGroupFile => $setup->{auth_group_file},
     MaxLoginAttempts => 1,
+
+    # Note that this test looks at the generated logging for verifying the
+    # behavior, thus we set the DebugLevel appropriately.
+    DebugLevel => 5,
 
     IfModules => {
       'mod_delay.c' => {
@@ -36721,7 +37480,7 @@ sub sftp_config_max_login_attempts_via_publickey {
 
       close($fh);
 
-      my $expected = 1;
+      my $expected = 3;
       $self->assert($seen == $expected,
         test_msg("Expected $expected LOG_CMD_ERR PASS messages, saw $seen"));
 

@@ -43,6 +43,37 @@
   <VirtualHost> sections.
 - Issue 1048 - Support using weak TLS certificates via the new AllowWeakSecurity
   TLSOption.
+- Issue 1149 - mod_quotatab_sql failing due to SQL syntax errors.  This is a
+  regression caused by Issue #392.
+- Issue 1061 - Freeing uninitialized memory causes SFTP issues with ed25519
+  keys.
+- Issue 1111 - "Corrupted MAC on input" errors using SFTP umac-64@openssh.com
+  digest.
+- Issue 1171 - PassivePort randomization is broken due to SO_REUSEPORT option.
+- Issue 1072 - Support configurable certificate settings in Redis SSL/TLS
+  connections.
+- Issue 369 - Provide function for obtaining memory pool information as e.g.
+  JSON.
+- Issue 1134 - AuthUserFile-based logins, directory listings are very slow due
+  to unbuffered reads.
+- Issue 1193 - Improper checking for reused TLS session for data transfers
+  using OpenSSL 1.1.1.
+- Issue 1168 - Improve error handling of OpenSSH host keys converted to PEM
+  format.
+- Issue 1179 - TLSRSACertificateKeyFile sanity checks fail unexpectedly for
+  passphrase-protected keys.
+- Issue 1174 - ftptop segfaults when using libncursesw on Gentoo.
+- Issue 1204 - Once TLSTimeoutHandshake is reached, internal "timed out" flag
+  never reset.
+- Issue 1133 - Support include files in mod_wrap2 allow/deny tables.
+- Issue 1200 - Disconnect SFTP clients that request unsupportable protocol
+  versions.
+- Issue 1207 - On Gentoo, "./configure --disable-ncurses" fails to link ftptop,
+  due to "undefined reference to symbol 'stdscr'" error.
+- Issue 1212 - mod_sql_mysql needs to quote table names due to reserved MySQL
+  keywords.
+- Issue 1175 - Unable to set per-user TLSOptions using mod_ifsession.
+- Issue 754 - Some mod_snmp counters were not being incremented properly.
 
 1.3.7 - Released 20-Jul-2020
 --------------------------------

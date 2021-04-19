@@ -1228,9 +1228,8 @@ static char **sreaddir(const char *dirname, const int sort) {
   DIR *d;
   struct dirent *de;
   struct stat st;
-  int i, dir_fd;
+  int i;
   char **p;
-  long ssize;
   size_t dsize;
 
   pr_fs_clear_cache2(dirname);
@@ -1253,7 +1252,6 @@ static char **sreaddir(const char *dirname, const int sort) {
    * don't guess *too* naively!
    *
    * 'dsize' must be greater than zero or we loop forever.
-   * 'ssize' must be at least big enough to hold a maximum-length name.
    */
 
   /* Guess the number of entries in the directory. */
@@ -1261,31 +1259,6 @@ static char **sreaddir(const char *dirname, const int sort) {
   if (dsize > LS_MAX_DSIZE) {
     dsize = LS_MAX_DSIZE;
   }
-
-  /* The directory has been opened already, but portably accessing the file
-   * descriptor inside the DIR struct isn't easy.  Some systems use "dd_fd" or
-   * "__dd_fd" rather than "d_fd".  Still others work really hard at opacity.
-   */
-#if defined(HAVE_DIRFD) 
-  dir_fd = dirfd(d);
-#elif defined(HAVE_STRUCT_DIR_D_FD)
-  dir_fd = d->d_fd;
-#elif defined(HAVE_STRUCT_DIR_DD_FD)
-  dir_fd = d->dd_fd;
-#elif defined(HAVE_STRUCT_DIR___DD_FD)
-  dir_fd = d->__dd_fd;
-#else
-  dir_fd = 0;
-#endif
-
-  ssize = get_name_max((char *) dirname, dir_fd);
-  if (ssize < 1) {
-    pr_log_debug(DEBUG1, "get_name_max(%s, %d) = %lu, using %d", dirname,
-      dir_fd, (unsigned long) ssize, NAME_MAX_GUESS);
-    ssize = NAME_MAX_GUESS;
-  }
-
-  ssize *= ((dsize / 4) + 1);
 
   /* Allocate first block for holding filenames.  Yes, we are explicitly using
    * malloc (and realloc, and calloc, later) rather than the memory pools.
@@ -2045,7 +2018,8 @@ static int dolist(cmd_rec *cmd, const char *opt, const char *resp_code,
             (list_flags & LS_FL_NO_ERROR_IF_ABSENT)) {
           return 0;
         }
-
+        pr_log_debug(DEBUG8,
+          "error checking %s: %s", target, strerror(xerrno));
         pr_response_add_err(R_450, "%s: %s",
           pr_fs_encode_path(cmd->tmp_pool, target), strerror(xerrno));
 
@@ -2931,6 +2905,8 @@ MODRET ls_stat(cmd_rec *cmd) {
   if (res < 0) {
     int xerrno = errno;
 
+    pr_log_debug(DEBUG8,
+          "error checking %s: %s", path, strerror(xerrno));
     pr_response_add_err(R_450, "%s: %s", path, strerror(xerrno));
 
     pr_cmd_set_errno(cmd, xerrno);
@@ -3181,6 +3157,8 @@ MODRET ls_nlst(cmd_rec *cmd) {
             return PR_HANDLED(cmd);
           }
 
+          pr_log_debug(DEBUG8,
+            "error checking %s: %s", target, strerror(errno));
           pr_response_add_err(R_450, _("No files found"));
 
           pr_cmd_set_errno(cmd, ENOENT);
@@ -3389,6 +3367,8 @@ MODRET ls_nlst(cmd_rec *cmd) {
         return PR_HANDLED(cmd);
       }
 
+      pr_log_debug(DEBUG8,
+          "error checking %s: %s", target, strerror(xerrno));
       pr_response_add_err(R_450, "%s: %s", cmd->arg, strerror(xerrno));
 
       pr_cmd_set_errno(cmd, xerrno);

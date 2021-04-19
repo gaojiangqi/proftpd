@@ -306,12 +306,6 @@
 /* Define if you have the fdatasync function.  */
 #undef HAVE_FDATASYNC
 
-/* Define if you have the fgetgrent function.  */
-#undef HAVE_FGETGRENT
-
-/* Define if you have the fgetpwent function.  */
-#undef HAVE_FGETPWENT
-
 /* Define if you have the flock function.  */
 #undef HAVE_FLOCK
 
@@ -392,6 +386,9 @@
 
 /* Define if you have the gmtime_r function.  */
 #undef HAVE_GMTIME_R
+
+/* Define if you have the Hiredis redisInitiateSSL function.  */
+#undef HAVE_HIREDIS_REDISINITIATESSL
 
 /* Define if you have the Hiredis redisReconnect function.  */
 #undef HAVE_HIREDIS_REDISRECONNECT
@@ -690,6 +687,9 @@
 /* Define if you have the <hiredis/hiredis.h> header file.  */
 #undef HAVE_HIREDIS_HIREDIS_H
 
+/* Define if you have the <hiredis/hiredis_ssl.h> header file.  */
+#undef HAVE_HIREDIS_HIREDIS_SSL_H
+
 /* Define if you have the <iconv.h> header file.  */
 #undef HAVE_ICONV_H
 
@@ -971,6 +971,9 @@
 
 /* Define if you have the libtinfo library (-ltinfo).  */
 #undef HAVE_LIBTINFO
+
+/* Define if you have the libtinfow library (-ltinfow).  */
+#undef HAVE_LIBTINFOW
 
 /* Define if you have the addrinfo struct.  */
 #undef HAVE_STRUCT_ADDRINFO

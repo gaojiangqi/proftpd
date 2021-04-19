@@ -167,6 +167,8 @@ static int chroot_allow_path(const char *path) {
 static void copy_progress_cb(int nwritten) {
   int res;
 
+  (void) nwritten;
+
   copy_iter_count++;
   if ((copy_iter_count % COPY_PROGRESS_NTH_ITER) != 0) {
     return;
@@ -2647,7 +2649,6 @@ int pr_fs_dircat(char *buf, int buflen, const char *dir1, const char *dir2) {
   buflen -= dir1len;
 
   if (buflen > 0 &&
-      dir1len >= 1 &&
       *(_dir1 + (dir1len-1)) != '/') {
     sstrcat(ptr, "/", buflen);
     ptr += 1;

@@ -2,7 +2,7 @@
  * mod_tls - An RFC2228 SSL/TLS module for ProFTPD
  *
  * Copyright (c) 2000-2002 Peter 'Luna' Runestig <peter@runestig.com>
- * Copyright (c) 2002-2020 TJ Saunders <tj@castaglia.org>
+ * Copyright (c) 2002-2021 TJ Saunders <tj@castaglia.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without modifi-
@@ -969,7 +969,12 @@ static const char *tls_get_fingerprint_from_file(pool *p, const char *path,
     EVP_PKEY *pkey;
 
     now = time(NULL);
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
     cert_end_ts = X509_get_notAfter(cert);
+#else
+    cert_end_ts = X509_get0_notAfter(cert);
+#endif
     pkey = X509_get_pubkey(cert);
 
     if (pkey != NULL) {
@@ -4535,17 +4540,21 @@ static int tls_sni_cb(SSL *ssl, int *alert_desc, void *user_data) {
 
 #if defined(TLS1_1_VERSION)
           case TLS1_1_VERSION:
+# if defined(SSL_OP_NO_TLSv1_1)
             if (!(ctx_options & SSL_OP_NO_TLSv1_1)) {
               protocol_ok = TRUE;
             }
+# endif /* SSL_OP_NO_TLSv1_1 */
             break;
 #endif /* TLS1_1_VERSION */
 
 #if defined(TLS1_2_VERSION)
           case TLS1_2_VERSION:
+# if defined(SSL_OP_NO_TLSv1_2)
             if (!(ctx_options & SSL_OP_NO_TLSv1_2)) {
               protocol_ok = TRUE;
             }
+# endif /* SSL_OP_NO_TLSv1_2 */
             break;
 #endif /* TLS1_2_VERSION */
 
@@ -7599,6 +7608,7 @@ static int tls_accept(conn_t *conn, unsigned char on_data) {
 
   /* If configured, set a timer for the handshake. */
   if (tls_handshake_timeout) {
+    tls_handshake_timed_out = FALSE;
     tls_handshake_timer_id = pr_timer_add(tls_handshake_timeout, -1,
       &tls_module, tls_handshake_timeout_cb, "SSL/TLS handshake");
   }
@@ -8159,10 +8169,13 @@ static int tls_accept(conn_t *conn, unsigned char on_data) {
            * in the control session tickets; the data session tickets presented
            * should have the exact same appdata, if they are coming from our
            * expected control session.
+           *
+           * However, we cannot just assume that session tickets will be used
+           * only for TLSv1.3 sessions.  It is possible that session tickets,
+           * rather than session IDs, will be used for TLSv1.2 and earlier
+           * sessions as well.
            */
-          if (matching_sess != 0 &&
-              SSL_version(ctrl_ssl) == TLS1_3_VERSION &&
-              SSL_version(ssl) == TLS1_3_VERSION) {
+          if (matching_sess != 0) {
 
 # if defined(PR_USE_OPENSSL_SSL_SESSION_TICKET_CALLBACK)
             if (tls_ctrl_ticket_appdata_len > 0 &&
@@ -8346,6 +8359,7 @@ static int tls_connect(conn_t *conn) {
 
   /* If configured, set a timer for the handshake. */
   if (tls_handshake_timeout) {
+    tls_handshake_timed_out = FALSE;
     tls_handshake_timer_id = pr_timer_add(tls_handshake_timeout, -1,
       &tls_module, tls_handshake_timeout_cb, "SSL/TLS handshake");
   }
@@ -8527,7 +8541,8 @@ static int tls_connect(conn_t *conn) {
 
 static void tls_cleanup(int flags) {
 
-#if OPENSSL_VERSION_NUMBER > 0x000907000L
+#if OPENSSL_VERSION_NUMBER > 0x000907000L && \
+    OPENSSL_VERSION_NUMBER < 0x10100000L
   if (tls_crypto_device != NULL) {
     ENGINE_cleanup();
     tls_crypto_device = NULL;
@@ -8568,20 +8583,23 @@ static void tls_cleanup(int flags) {
   }
 
   if (!(flags & TLS_CLEANUP_FL_SESS_INIT)) {
-    ERR_free_strings();
-
 #if OPENSSL_VERSION_NUMBER >= 0x10000001L
     /* The ERR_remove_state(0) usage is deprecated due to thread ID
      * differences among platforms; see the OpenSSL-1.0.0 CHANGES file
      * for details.  So for new enough OpenSSL installations, use the
      * proper way to clear the error queue state.
      */
+# if OPENSSL_VERSION_NUMBER < 0x10100000L
     ERR_remove_thread_state(NULL);
+# endif /* prior to OpenSSL-1.1.x */
 #else
     ERR_remove_state(0);
 #endif /* OpenSSL prior to 1.0.0-beta1 */
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+    ERR_free_strings();
     EVP_cleanup();
+#endif /* prior to OpenSSL-1.1.x */
 
   } else {
     /* Only call EVP_cleanup() et al if other OpenSSL-using modules are not
@@ -8605,7 +8623,6 @@ static void tls_cleanup(int flags) {
         pr_module_get("mod_sftp.c") == NULL &&
         pr_module_get("mod_sql.c") == NULL &&
         pr_module_get("mod_sql_passwd.c") == NULL) {
-      ERR_free_strings();
 
 #if OPENSSL_VERSION_NUMBER >= 0x10000001L
       /* The ERR_remove_state(0) usage is deprecated due to thread ID
@@ -8613,12 +8630,17 @@ static void tls_cleanup(int flags) {
        * for details.  So for new enough OpenSSL installations, use the
        * proper way to clear the error queue state.
        */
+# if OPENSSL_VERSION_NUMBER < 0x10100000L
       ERR_remove_thread_state(NULL);
+# endif /* prior to OpenSSL-1.1.x */
 #else
       ERR_remove_state(0);
 #endif /* OpenSSL prior to 1.0.0-beta1 */
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+      ERR_free_strings();
       EVP_cleanup();
+#endif /* prior to OpenSSL-1.1.x */
     }
   }
 }
@@ -9861,7 +9883,12 @@ static void tls_setup_cert_environ(pool *p, const char *env_prefix,
     tls_setup_cert_ext_environ(pstrcat(p, env_prefix, "EXT_", NULL), cert);
 
     bio = BIO_new(BIO_s_mem());
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
     ASN1_TIME_print(bio, X509_get_notBefore(cert));
+#else
+    ASN1_TIME_print(bio, X509_get0_notBefore(cert));
+#endif
     datalen = BIO_get_mem_data(bio, &data);
     data[datalen] = '\0';
 
@@ -9872,7 +9899,12 @@ static void tls_setup_cert_environ(pool *p, const char *env_prefix,
     BIO_free(bio);
 
     bio = BIO_new(BIO_s_mem());
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
     ASN1_TIME_print(bio, X509_get_notAfter(cert));
+#else
+    ASN1_TIME_print(bio, X509_get0_notAfter(cert));
+#endif
     datalen = BIO_get_mem_data(bio, &data);
     data[datalen] = '\0';
 
@@ -13112,10 +13144,22 @@ MODRET tls_log_auth(cmd_rec *cmd) {
 }
 
 MODRET tls_post_pass(cmd_rec *cmd) {
-  config_rec *protocols_config;
+  config_rec *c, *protocols_config;
 
   if (tls_engine == FALSE) {
     return PR_DECLINED(cmd);
+  }
+
+  c = find_config(main_server->conf, CONF_PARAM, "TLSOptions", FALSE);
+  while (c != NULL) {
+    unsigned long opts = 0;
+
+    pr_signals_handle();
+
+    opts = *((unsigned long *) c->argv[0]);
+    tls_opts |= opts;
+
+    c = find_config_next(c, c->next, CONF_PARAM, "TLSOptions", FALSE);
   }
 
   /* At this point, we can look up the Protocols config if the client has been
@@ -13134,11 +13178,9 @@ MODRET tls_post_pass(cmd_rec *cmd) {
 
   if (tls_authenticated &&
       *tls_authenticated == TRUE) {
-    config_rec *c;
 
     c = find_config(TOPLEVEL_CONF, CONF_PARAM, "TLSRequired", FALSE);
-    if (c) {
-
+    if (c != NULL) {
       /* Lookup the TLSRequired directive again in this context (which could be
        * <Anonymous>, for example, or modified by mod_ifsession).
        */
@@ -13163,7 +13205,7 @@ MODRET tls_post_pass(cmd_rec *cmd) {
       }
     }
 
-    if (protocols_config) {
+    if (protocols_config != NULL) {
       register unsigned int i;
       int allow_ftps = FALSE;
       array_header *protocols;
@@ -13190,7 +13232,7 @@ MODRET tls_post_pass(cmd_rec *cmd) {
         }
       }
 
-      if (!allow_ftps) {
+      if (allow_ftps == FALSE) {
         tls_log("ftps protocol denied by Protocols config");
         pr_response_send(R_530, "%s", _("Login incorrect."));
         pr_session_disconnect(&tls_module, PR_SESS_DISCONNECT_CONFIG_ACL,
@@ -13838,11 +13880,20 @@ MODRET set_tlsdsakeyfile(cmd_rec *cmd) {
       unsigned long err_code;
 
       err_code = ERR_peek_error();
-      if (ERR_GET_REASON(err_code) != PEM_R_BAD_PASSWORD_READ) {
-        PRIVS_RELINQUISH
+      switch (ERR_GET_REASON(err_code)) {
+        /* These are "expected" error codes from working with
+         * passphrase-protected keys.
+         */
+        case EVP_R_BAD_DECRYPT:
+        case PEM_R_BAD_PASSWORD_READ:
+          break;
 
-        CONF_ERROR(cmd, pstrcat(cmd->tmp_pool, "unable to use '", path, "': ",
-          tls_get_errors2(cmd->tmp_pool), NULL));
+        default: {
+          PRIVS_RELINQUISH
+
+          CONF_ERROR(cmd, pstrcat(cmd->tmp_pool, "unable to use '", path, "': ",
+            tls_get_errors2(cmd->tmp_pool), NULL));
+        }
       }
     }
 
@@ -13928,11 +13979,20 @@ MODRET set_tlseckeyfile(cmd_rec *cmd) {
       unsigned long err_code;
 
       err_code = ERR_peek_error();
-      if (ERR_GET_REASON(err_code) != PEM_R_BAD_PASSWORD_READ) {
-        PRIVS_RELINQUISH
+      switch (ERR_GET_REASON(err_code)) {
+        /* These are "expected" error codes from working with
+         * passphrase-protected keys.
+         */
+        case EVP_R_BAD_DECRYPT:
+        case PEM_R_BAD_PASSWORD_READ:
+          break;
 
-        CONF_ERROR(cmd, pstrcat(cmd->tmp_pool, "unable to use '", path, "': ",
-          tls_get_errors2(cmd->tmp_pool), NULL));
+        default: {
+          PRIVS_RELINQUISH
+
+          CONF_ERROR(cmd, pstrcat(cmd->tmp_pool, "unable to use '", path, "': ",
+            tls_get_errors2(cmd->tmp_pool), NULL));
+        }
       }
     }
 
@@ -14689,11 +14749,20 @@ MODRET set_tlsrsakeyfile(cmd_rec *cmd) {
       unsigned long err_code;
 
       err_code = ERR_peek_error();
-      if (ERR_GET_REASON(err_code) != PEM_R_BAD_PASSWORD_READ) {
-        PRIVS_RELINQUISH
+      switch (ERR_GET_REASON(err_code)) {
+        /* These are "expected" error codes from working with
+         * passphrase-protected keys.
+         */
+        case EVP_R_BAD_DECRYPT:
+        case PEM_R_BAD_PASSWORD_READ:
+          break;
 
-        CONF_ERROR(cmd, pstrcat(cmd->tmp_pool, "unable to use '", path, "': ",
-          tls_get_errors2(cmd->tmp_pool), NULL));
+        default: {
+          PRIVS_RELINQUISH
+
+          CONF_ERROR(cmd, pstrcat(cmd->tmp_pool, "unable to use '", path, "': ",
+            tls_get_errors2(cmd->tmp_pool), NULL));
+        }
       }
     }
 
@@ -15362,7 +15431,9 @@ static void tls_shutdown_ev(const void *event_data, void *user_data) {
     ssl_ctx = NULL;
   }
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
   RAND_cleanup();
+#endif /* prior to OpenSSL-1.1.x */
 }
 
 static void tls_restart_ev(const void *event_data, void *user_data) {
@@ -18315,7 +18386,8 @@ static int tls_ctx_set_all(server_rec *s, SSL_CTX *ctx) {
   X509 *dsa_cert = NULL, *ec_cert = NULL, *rsa_cert = NULL;
 
   if (tls_opts & TLS_OPT_ALLOW_WEAK_SECURITY) {
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L && \
+    !defined(HAVE_LIBRESSL)
     SSL_CTX_set_security_level(ctx, 0);
 #endif /* OpenSSL-1.1.0 and later */
   }
@@ -18421,7 +18493,13 @@ static int tls_init(void) {
    *
    * For now, we only log if there is a difference.
    */
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
   openssl_version = SSLeay();
+#else
+  openssl_version = OpenSSL_version_num();
+#endif /* prior to OpenSSL-1.1.x */
 
   if (openssl_version != OPENSSL_VERSION_NUMBER) {
     int unexpected_version_mismatch = TRUE;
@@ -18437,13 +18515,20 @@ static int tls_init(void) {
     }
 
     if (unexpected_version_mismatch == TRUE) {
+      const char *version_text = NULL;
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
+      version_text = SSLeay_version(SSLEAY_VERSION);
+#else
+      version_text = OpenSSL_version(OPENSSL_VERSION);
+#endif /* prior to OpenSSL-1.1.x */
+
       pr_log_pri(PR_LOG_WARNING, MOD_TLS_VERSION
         ": compiled using OpenSSL version '%s' headers, but linked to "
-        "OpenSSL version '%s' library", OPENSSL_VERSION_TEXT,
-        SSLeay_version(SSLEAY_VERSION));
+        "OpenSSL version '%s' library", OPENSSL_VERSION_TEXT, version_text);
       tls_log("compiled using OpenSSL version '%s' headers, but linked to "
-        "OpenSSL version '%s' library", OPENSSL_VERSION_TEXT,
-        SSLeay_version(SSLEAY_VERSION));
+        "OpenSSL version '%s' library", OPENSSL_VERSION_TEXT, version_text);
     }
   }
 
@@ -18458,16 +18543,17 @@ static int tls_init(void) {
 
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
   OPENSSL_config(NULL);
-#endif /* prior to OpenSSL-1.1.x */
-  SSL_load_error_strings();
-  SSL_library_init();
 
   /* It looks like calling OpenSSL_add_all_algorithms() is necessary for
    * handling some algorithms (e.g. PKCS12 files) which are NOT added by
    * just calling SSL_library_init().
    */
-  ERR_load_crypto_strings();
   OpenSSL_add_all_algorithms();
+
+  SSL_load_error_strings();
+  SSL_library_init();
+  ERR_load_crypto_strings();
+#endif /* prior to OpenSSL-1.1.x */
 
 #ifdef PR_USE_CTRLS
   if (pr_ctrls_register(&tls_module, "tls", "query/tune mod_tls settings",

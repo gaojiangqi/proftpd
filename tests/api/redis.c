@@ -1,6 +1,6 @@
 /*
  * ProFTPD - FTP server testsuite
- * Copyright (c) 2017-2020 The ProFTPD Project team
+ * Copyright (c) 2017-2021 The ProFTPD Project team
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -103,7 +103,8 @@ START_TEST (redis_conn_new_test) {
   res = pr_redis_conn_destroy(redis);
   fail_unless(res == TRUE, "Failed to close redis: %s", strerror(errno));
 
-  if (getenv("CIRRUS_CLONE_DEPTH") == NULL &&
+  if (getenv("CI") == NULL &&
+      getenv("CIRRUS_CLONE_DEPTH") == NULL &&
       getenv("TRAVIS") == NULL) {
     /* Now deliberately set the wrong server and port. */
     redis_set_server("127.1.2.3", redis_port, 0UL, NULL, NULL);
@@ -721,7 +722,8 @@ START_TEST (redis_sentinel_conn_new_test) {
 
   sentinels = make_array(p, 0, sizeof(pr_netaddr_t *));
 
-  if (getenv("CIRRUS_CLONE_DEPTH") != NULL ||
+  if (getenv("CI") != NULL ||
+      getenv("CIRRUS_CLONE_DEPTH") != NULL ||
       getenv("TRAVIS") != NULL) {
     /* Treat the local Redis server as a Sentinel. */
     addr = pr_netaddr_get_addr(p, "127.0.0.1", NULL);
@@ -1142,7 +1144,7 @@ START_TEST (redis_get_with_namespace_test) {
     strerror(errno));
   fail_unless(valsz == strlen(val), "Expected %lu, got %lu",
     (unsigned long) strlen(val), (unsigned long) valsz);
-  fail_unless(strncmp(data, val, valsz) == 0, "Expected '%s', got '%.*s'",
+  fail_unless(memcmp(data, val, valsz) == 0, "Expected '%s', got '%.*s'",
     val, (int) valsz, data);
 
   mark_point();
@@ -1761,7 +1763,7 @@ START_TEST (redis_hash_set_test) {
   fail_unless(valsz == 7, "Expected item length 7, got %lu",
     (unsigned long) valsz);
   fail_unless(val != NULL, "Failed to get value from hash");
-  fail_unless(strncmp(val, "hashval", valsz) == 0,
+  fail_unless(memcmp(val, "hashval", valsz) == 0,
     "Expected 'hashval', got '%.*s'", (int) valsz, val);
 
   mark_point();
@@ -2804,7 +2806,7 @@ START_TEST (redis_list_get_test) {
   fail_unless(res == 0, "Failed to get item in list: %s", strerror(errno));
   fail_unless(val != NULL, "Expected value, got null");
   fail_unless(valsz == 3, "Expected 3, got %lu", (unsigned long) valsz);
-  fail_unless(strncmp(val, "foo", 3) == 0, "Expected 'foo', got '%.*s'",
+  fail_unless(memcmp(val, "foo", 3) == 0, "Expected 'foo', got '%.*s'",
     (int) valsz, val);
 
   mark_point();
@@ -3013,7 +3015,7 @@ START_TEST (redis_list_pop_left_test) {
   fail_unless(res == 0, "Failed to get item in list: %s", strerror(errno));
   fail_unless(val != NULL, "Expected value, got null");
   fail_unless(valsz == 3, "Expected 3, got %lu", (unsigned long) valsz);
-  fail_unless(strncmp(val, "foo", 3) == 0, "Expected 'foo', got '%.*s'",
+  fail_unless(memcmp(val, "foo", 3) == 0, "Expected 'foo', got '%.*s'",
     (int) valsz, val);
 
   mark_point();
@@ -3060,7 +3062,7 @@ START_TEST (redis_list_pop_right_test) {
   fail_unless(res == 0, "Failed to get item in list: %s", strerror(errno));
   fail_unless(val != NULL, "Expected value, got null");
   fail_unless(valsz == 3, "Expected 3, got %lu", (unsigned long) valsz);
-  fail_unless(strncmp(val, "foo", 3) == 0, "Expected 'foo', got '%.*s'",
+  fail_unless(memcmp(val, "foo", 3) == 0, "Expected 'foo', got '%.*s'",
     (int) valsz, val);
 
   mark_point();
@@ -3279,7 +3281,7 @@ START_TEST (redis_list_rotate_test) {
   fail_unless(res == 0, "Failed to rotate list '%s': %s", key, strerror(errno));
   fail_unless(val != NULL, "Expected value, got NULL");
   fail_unless(valsz == 3, "Expected 3, got %lu", (unsigned long) valsz);
-  fail_unless(strncmp(val, "bar", valsz) == 0, "Expected 'bar', got '%.*s'",
+  fail_unless(memcmp(val, "bar", valsz) == 0, "Expected 'bar', got '%.*s'",
     (int) valsz, val);
 
   val = NULL;
@@ -3290,7 +3292,7 @@ START_TEST (redis_list_rotate_test) {
   fail_unless(res == 0, "Failed to rotate list '%s': %s", key, strerror(errno));
   fail_unless(val != NULL, "Expected value, got NULL");
   fail_unless(valsz == 3, "Expected 3, got %lu", (unsigned long) valsz);
-  fail_unless(strncmp(val, "foo", valsz) == 0, "Expected 'foo', got '%.*s'",
+  fail_unless(memcmp(val, "foo", valsz) == 0, "Expected 'foo', got '%.*s'",
     (int) valsz, val);
 
   val = NULL;
@@ -3301,7 +3303,7 @@ START_TEST (redis_list_rotate_test) {
   fail_unless(res == 0, "Failed to rotate list '%s': %s", key, strerror(errno));
   fail_unless(val != NULL, "Expected value, got NULL");
   fail_unless(valsz == 3, "Expected 3, got %lu", (unsigned long) valsz);
-  fail_unless(strncmp(val, "bar", valsz) == 0, "Expected 'bar', got '%.*s'",
+  fail_unless(memcmp(val, "bar", valsz) == 0, "Expected 'bar', got '%.*s'",
     (int) valsz, val);
 
   mark_point();
@@ -4963,9 +4965,8 @@ Suite *tests_get_redis_suite(void) {
 
   /* Some of the Redis tests may take a little longer. */
   tcase_set_timeout(testcase, 30);
-
-  suite_add_tcase(suite, testcase);
 #endif /* PR_USE_REDIS */
 
+  suite_add_tcase(suite, testcase);
   return suite;
 }

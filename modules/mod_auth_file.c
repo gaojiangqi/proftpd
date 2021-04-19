@@ -1,7 +1,7 @@
 /*
  * ProFTPD: mod_auth_file - file-based authentication module that supports
  *                          restrictions on the file contents
- * Copyright (c) 2002-2020 The ProFTPD Project team
+ * Copyright (c) 2002-2021 The ProFTPD Project team
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,10 +40,6 @@
 # error "ProFTPD 1.2.7rc2 or later required"
 #endif
 
-#ifndef BUFSIZ
-# define BUFSIZ          PR_TUNABLE_BUFFER_SIZE
-#endif /* !BUFSIZ */
-
 module auth_file_module;
 
 typedef union {
@@ -54,7 +50,7 @@ typedef union {
 
 typedef struct file_rec {
   char *af_path;
-  FILE *af_file;
+  pr_fh_t *af_file_fh;
   unsigned int af_lineno;
 
   unsigned char af_restricted_ids;
@@ -248,18 +244,16 @@ static int af_check_file(pool *p, const char *name, const char *path,
   return 0;
 }
 
-#ifndef HAVE_FGETPWENT
-
 #define NPWDFIELDS      7
 
-static char pwdbuf[BUFSIZ];
+static char pwdbuf[PR_TUNABLE_BUFFER_SIZE];
 static char *pwdfields[NPWDFIELDS];
 static struct passwd pwent;
 
 static struct passwd *af_getpasswd(const char *buf, unsigned int lineno) {
   register unsigned int i;
   register char *cp = NULL;
-  char *ep = NULL, *buffer = NULL;
+  char *ptr = NULL, *buffer = NULL;
   char **fields = NULL;
   struct passwd *pwd = NULL;
 
@@ -267,8 +261,8 @@ static struct passwd *af_getpasswd(const char *buf, unsigned int lineno) {
   buffer = pwdbuf;
   pwd = &pwent;
 
-  sstrncpy(buffer, buf, BUFSIZ-1);
-  buffer[BUFSIZ-1] = '\0';
+  sstrncpy(buffer, buf, PR_TUNABLE_BUFFER_SIZE-1);
+  buffer[PR_TUNABLE_BUFFER_SIZE-1] = '\0';
 
   for (cp = buffer, i = 0; i < NPWDFIELDS && cp; i++) {
     fields[i] = cp;
@@ -285,27 +279,39 @@ static struct passwd *af_getpasswd(const char *buf, unsigned int lineno) {
   }
 
   if (i != NPWDFIELDS) {
-    pr_log_pri(PR_LOG_ERR, "Malformed entry in AuthUserFile file (line %u)",
-      lineno);
-    return NULL;
-  }
-
-  if (*fields[2] == '\0' ||
-      *fields[3] == '\0') {
+    pr_log_pri(PR_LOG_ERR,
+      "Malformed entry in AuthUserFile file (field count %d != %d, line %u)",
+      i, (int) NPWDFIELDS, lineno);
     return NULL;
   }
 
   pwd->pw_name = fields[0];
   pwd->pw_passwd = fields[1];
 
-  if (fields[2][0] == '\0' ||
-     ((pwd->pw_uid = strtol(fields[2], &ep, 10)) == 0 && *ep)) {
-       return NULL;
+  if (*fields[2] == '\0' ||
+      *fields[3] == '\0') {
+    pr_trace_msg(trace_channel, 3,
+      "missing UID/GID fields for user '%.100s' (line %u), skipping",
+      pwd->pw_name, lineno);
+    return NULL;
   }
 
-  if (fields[3][0] == '\0' ||
-     ((pwd->pw_gid = strtol(fields[3], &ep, 10)) == 0 && *ep)) {
-       return NULL;
+  ptr = NULL;
+  pwd->pw_uid = strtol(fields[2], &ptr, 10);
+  if (*ptr != '\0') {
+    pr_trace_msg(trace_channel, 3,
+      "non-numeric UID field '%.100s' for user '%.100s' (line %u), skipping",
+      fields[2], pwd->pw_name, lineno);
+    return NULL;
+  }
+
+  ptr = NULL;
+  pwd->pw_gid = strtol(fields[3], &ptr, 10);
+  if (*ptr != '\0') {
+    pr_trace_msg(trace_channel, 3,
+      "non-numeric GID field '%.100s' for user '%.100s' (line %u), skipping",
+      fields[3], pwd->pw_name, lineno);
+    return NULL;
   }
 
   pwd->pw_gecos = fields[4];
@@ -314,9 +320,6 @@ static struct passwd *af_getpasswd(const char *buf, unsigned int lineno) {
 
   return pwd;
 }
-#endif /* !HAVE_FGETPWENT */
-
-#ifndef HAVE_FGETGRENT
 
 #define MAXMEMBERS	4096
 #define NGRPFIELDS      4
@@ -326,11 +329,11 @@ static struct group grent;
 static char *grpfields[NGRPFIELDS];
 static char *members[MAXMEMBERS+1];
 
-static char *af_getgrentline(char **buf, int *buflen, FILE *fp,
+static char *af_getgrentline(char **buf, int *buflen, pr_fh_t *fh,
     unsigned int *lineno) {
   char *cp = *buf;
 
-  while (fgets(cp, (*buflen) - (cp - *buf), fp) != NULL) {
+  while (pr_fsio_gets(cp, (*buflen) - (cp - *buf), fh) != NULL) {
     pr_signals_handle();
 
     (*lineno)++;
@@ -441,7 +444,6 @@ static struct group *af_getgrp(const char *buf, unsigned int lineno) {
 
   return &grent;
 }
-#endif /* !HAVE_FGETGRENT */
 
 static int af_allow_grent(pool *p, struct group *grp) {
   if (af_group_file == NULL) {
@@ -495,9 +497,9 @@ static int af_allow_grent(pool *p, struct group *grp) {
 
 static void af_endgrent(void) {
   if (af_group_file != NULL &&
-      af_group_file->af_file != NULL) {
-    fclose(af_group_file->af_file);
-    af_group_file->af_file = NULL;
+      af_group_file->af_file_fh != NULL) {
+    pr_fsio_close(af_group_file->af_file_fh);
+    af_group_file->af_file_fh = NULL;
     af_group_file->af_lineno = 0;
   }
 }
@@ -506,29 +508,25 @@ static struct group *af_getgrent(pool *p) {
   struct group *grp = NULL, *res = NULL;
 
   if (af_group_file == NULL ||
-      af_group_file->af_file == NULL) {
+      af_group_file->af_file_fh == NULL) {
     errno = EINVAL;
     return NULL;
   }
 
   while (TRUE) {
-#ifdef HAVE_FGETGRENT
-    pr_signals_handle();
-    grp = fgetgrent(af_group_file->af_file);
-#else
     char *cp = NULL, *buf = NULL;
-    int buflen = BUFSIZ;
+    int buflen = PR_TUNABLE_BUFFER_SIZE;
 
     pr_signals_handle();
 
-    buf = malloc(BUFSIZ);
+    buf = malloc(buflen);
     if (buf == NULL) {
       pr_log_pri(PR_LOG_ALERT, "Out of memory!");
       _exit(1);
     }
     grp = NULL;
 
-    while (af_getgrentline(&buf, &buflen, af_group_file->af_file,
+    while (af_getgrentline(&buf, &buflen, af_group_file->af_file_fh,
         &(af_group_file->af_lineno)) != NULL) {
 
       pr_signals_handle();
@@ -545,11 +543,16 @@ static struct group *af_getgrent(pool *p) {
       }
 
       grp = af_getgrp(buf, af_group_file->af_lineno);
+
+      /* If grp is NULL here, it's a malformed entry; keep looking. */
+      if (grp == NULL) {
+        continue;
+      }
+
       free(buf);
 
       break;
     }
-#endif /* !HAVE_FGETGRENT */
 
     /* If grp is NULL now, the file is empty - nothing more to be read. */
     if (grp == NULL) {
@@ -609,21 +612,31 @@ static int af_setgrent(pool *p) {
 
   if (af_group_file != NULL) {
     int xerrno;
+    struct stat st;
 
-    if (af_group_file->af_file != NULL) {
+    if (af_group_file->af_file_fh != NULL) {
+      pr_buffer_t *pbuf;
+
       /* If already opened, rewind */
-      rewind(af_group_file->af_file);
+      (void) pr_fsio_lseek(af_group_file->af_file_fh, 0, SEEK_SET);
+
+      /* Make sure to clear any buffers as well. */
+      pbuf = af_group_file->af_file_fh->fh_buf;
+      if (pbuf != NULL) {
+        memset(pbuf->buf, '\0', pbuf->buflen);
+        pbuf->current = pbuf->buf;
+        pbuf->remaining = pbuf->buflen;
+      }
+
       return 0;
     }
 
     PRIVS_ROOT
-    af_group_file->af_file = fopen(af_group_file->af_path, "r");
+    af_group_file->af_file_fh = pr_fsio_open(af_group_file->af_path, O_RDONLY);
     xerrno = errno;
     PRIVS_RELINQUISH
 
-    if (af_group_file->af_file == NULL) {
-      struct stat st;
-
+    if (af_group_file->af_file_fh == NULL) {
       if (pr_fsio_stat(af_group_file->af_path, &st) == 0) {
         pr_log_pri(PR_LOG_WARNING,
           "error: unable to open AuthGroupFile file '%s' (file owned by "
@@ -643,15 +656,15 @@ static int af_setgrent(pool *p) {
       return -1;
     }
 
-    /* As the file may contain sensitive data, we do not want it lingering
-     * around in stdio buffers.
-     */
-    (void) setvbuf(af_group_file->af_file, NULL, _IONBF, 0);
+    /* Set the optimum buffer/block size for this filehandle. */
+    if (pr_fsio_fstat(af_group_file->af_file_fh, &st) == 0) {
+      af_group_file->af_file_fh->fh_iosz = st.st_blksize;
+    }
 
-    if (fcntl(fileno(af_group_file->af_file), F_SETFD, FD_CLOEXEC) < 0) {
+    if (fcntl(PR_FH_FD(af_group_file->af_file_fh), F_SETFD, FD_CLOEXEC) < 0) {
       pr_log_pri(PR_LOG_WARNING, MOD_AUTH_FILE_VERSION
         ": unable to set CLOEXEC on AuthGroupFile %s (fd %d): %s",
-        af_group_file->af_path, fileno(af_group_file->af_file),
+        af_group_file->af_path, PR_FH_FD(af_group_file->af_file_fh),
         strerror(errno));
     }
 
@@ -734,9 +747,9 @@ static int af_allow_pwent(pool *p, struct passwd *pwd) {
 
 static void af_endpwent(void) {
   if (af_user_file != NULL &&
-      af_user_file->af_file != NULL) {
-    fclose(af_user_file->af_file);
-    af_user_file->af_file = NULL;
+      af_user_file->af_file_fh != NULL) {
+    pr_fsio_close(af_user_file->af_file_fh);
+    af_user_file->af_file_fh = NULL;
     af_user_file->af_lineno = 0;
   }
 }
@@ -745,24 +758,20 @@ static struct passwd *af_getpwent(pool *p) {
   struct passwd *pwd = NULL, *res = NULL;
 
   if (af_user_file == NULL ||
-      af_user_file->af_file == NULL) {
+      af_user_file->af_file_fh == NULL) {
     errno = EINVAL;
     return NULL;
   }
 
   while (TRUE) {
-#ifdef HAVE_FGETPWENT
-    pr_signals_handle();
-    pwd = fgetpwent(af_user_file->af_file);
-#else
-    char buf[BUFSIZ+1] = {'\0'};
+    char buf[PR_TUNABLE_BUFFER_SIZE+1] = {'\0'};
 
     pr_signals_handle();
 
     memset(buf, '\0', sizeof(buf));
     pwd = NULL;
 
-    while (fgets(buf, sizeof(buf)-1, af_user_file->af_file) != NULL) {
+    while (pr_fsio_gets(buf, sizeof(buf)-1, af_user_file->af_file_fh) != NULL) {
       pr_signals_handle();
 
       af_user_file->af_lineno++;
@@ -776,9 +785,15 @@ static struct passwd *af_getpwent(pool *p) {
 
       buf[strlen(buf)-1] = '\0';
       pwd = af_getpasswd(buf, af_user_file->af_lineno);
+
+      /* If pwd is NULL here, it's a malformed entry; keep looking. */
+      if (pwd == NULL) {
+        memset(buf, '\0', sizeof(buf));
+        continue;
+      }
+
       break;
     }
-#endif /* !HAVE_FGETPWENT */
 
     /* If pwd is NULL now, the file is empty - nothing more to be read. */
     if (pwd == NULL) {
@@ -786,9 +801,7 @@ static struct passwd *af_getpwent(pool *p) {
     }
 
     if (af_allow_pwent(p, pwd) < 0) {
-#ifndef HAVE_FGETPWENT
       memset(buf, '\0', sizeof(buf));
-#endif
       continue;
     }
 
@@ -846,21 +859,31 @@ static int af_setpwent(pool *p) {
 
   if (af_user_file != NULL) {
     int xerrno;
+    struct stat st;
 
-    if (af_user_file->af_file != NULL) {
+    if (af_user_file->af_file_fh != NULL) {
+      pr_buffer_t *pbuf;
+
       /* If already opened, rewind */
-      rewind(af_user_file->af_file);
+      (void) pr_fsio_lseek(af_user_file->af_file_fh, 0, SEEK_SET);
+
+      /* Make sure to clear any buffers as well. */
+      pbuf = af_user_file->af_file_fh->fh_buf;
+      if (pbuf != NULL) {
+        memset(pbuf->buf, '\0', pbuf->buflen);
+        pbuf->current = pbuf->buf;
+        pbuf->remaining = pbuf->buflen;
+      }
+
       return 0;
     }
 
     PRIVS_ROOT
-    af_user_file->af_file = fopen(af_user_file->af_path, "r");
+    af_user_file->af_file_fh = pr_fsio_open(af_user_file->af_path, O_RDONLY);
     xerrno = errno;
     PRIVS_RELINQUISH
 
-    if (af_user_file->af_file == NULL) {
-      struct stat st;
-
+    if (af_user_file->af_file_fh == NULL) {
       if (pr_fsio_stat(af_user_file->af_path, &st) == 0) {
         pr_log_pri(PR_LOG_WARNING,
           "error: unable to open AuthUserFile file '%s' (file owned by "
@@ -880,15 +903,15 @@ static int af_setpwent(pool *p) {
       return -1;
     }
 
-    /* As the file may contain sensitive data, we do not want it lingering
-     * around in stdio buffers.
-     */
-    (void) setvbuf(af_user_file->af_file, NULL, _IONBF, 0);
+    /* Set the optimum buffer/block size for this filehandle. */
+    if (pr_fsio_fstat(af_user_file->af_file_fh, &st) == 0) {
+      af_user_file->af_file_fh->fh_iosz = st.st_blksize;
+    }
 
-    if (fcntl(fileno(af_user_file->af_file), F_SETFD, FD_CLOEXEC) < 0) {
+    if (fcntl(PR_FH_FD(af_user_file->af_file_fh), F_SETFD, FD_CLOEXEC) < 0) {
       pr_log_pri(PR_LOG_WARNING, MOD_AUTH_FILE_VERSION
         ": unable to set CLOEXEC on AuthUserFile %s (fd %d): %s",
-        af_user_file->af_path, fileno(af_user_file->af_file),
+        af_user_file->af_path, PR_FH_FD(af_user_file->af_file_fh),
         strerror(errno));
     }
 
@@ -1788,4 +1811,3 @@ module auth_file_module = {
   /* Module version */
   MOD_AUTH_FILE_VERSION
 };
-

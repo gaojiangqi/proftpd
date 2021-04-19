@@ -2,7 +2,7 @@
  * ProFTPD: mod_sql -- SQL frontend
  * Copyright (c) 1998-1999 Johnie Ingram.
  * Copyright (c) 2001 Andrew Houghton.
- * Copyright (c) 2004-2020 TJ Saunders
+ * Copyright (c) 2004-2021 TJ Saunders
  *  
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,6 +37,11 @@
 
 #if defined(HAVE_OPENSSL) || defined(PR_USE_OPENSSL)
 # include <openssl/evp.h>
+#endif
+
+/* Define if you have the LibreSSL library.  */
+#if defined(LIBRESSL_VERSION_NUMBER)
+# define HAVE_LIBRESSL  1
 #endif
 
 /* default information for tables and fields */
@@ -732,9 +737,28 @@ struct sql_resolved {
   int conn_flags;
 };
 
+static int is_escaped_text(const char *text, size_t text_len) {
+  register unsigned int i;
+
+  if (text[0] != '\'') {
+    return FALSE;
+  }
+
+  if (text[text_len-1] != '\'') {
+    return FALSE;
+  }
+
+  for (i = 1; i < text_len-1; i++) {
+    if (text[i] == '\'') {
+      return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
 static int sql_resolved_append_text(pool *p, struct sql_resolved *resolved,
     const char *text, size_t text_len) {
-  modret_t *mr;
   char *new_text;
   size_t new_textlen;
 
@@ -743,15 +767,32 @@ static int sql_resolved_append_text(pool *p, struct sql_resolved *resolved,
     return 0;
   }
 
-  mr = sql_dispatch(sql_make_cmd(p, 2, resolved->conn_name, text),
-    "sql_escapestring");
-  if (check_response(mr, resolved->conn_flags) < 0) {
-    errno = EIO;
-    return -1;
-  }
+  /* For backward compatibility (see Issue #1149), we indulge in a little
+   * heuristic here, and only escape the text if it hasn't already been
+   * escaped.  How to properly tell?  If the first and last characters of
+   * the given text are `'`, AND there are no other occurrences of that
+   * character in the text, assume it has already been quoted.
+   */
+  if (is_escaped_text(text, text_len) == FALSE) {
+    modret_t *mr;
 
-  new_text = (char *) mr->data;
-  new_textlen = strlen(new_text);
+    mr = sql_dispatch(sql_make_cmd(p, 2, resolved->conn_name, text),
+      "sql_escapestring");
+    if (check_response(mr, resolved->conn_flags) < 0) {
+      errno = EIO;
+      return -1;
+    }
+
+    new_text = (char *) mr->data;
+    new_textlen = strlen(new_text);
+
+  } else {
+    pr_trace_msg(trace_channel, 17,
+      "text '%s' is already escaped, skipping escaping it again", text);
+
+    new_text = (char *) text;
+    new_textlen = text_len;
+  }
 
   if (new_textlen > resolved->buflen) {
     new_textlen = resolved->buflen;
@@ -1141,7 +1182,10 @@ static modret_t *sql_auth_openssl(cmd_rec *cmd, const char *plaintext,
   *hashvalue = '\0';
   hashvalue++;
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || \
+    defined(HAVE_LIBRESSL)
   OpenSSL_add_all_digests();
+#endif /* OpenSSL-1.1.0 and later */
 
   md = EVP_get_digestbyname(digestname);
   if (md == NULL) {

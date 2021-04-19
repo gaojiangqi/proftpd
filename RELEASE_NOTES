@@ -23,6 +23,9 @@ ChangeLog files.
     `--disable-openssl-api-compat` configure option to disable use of this
     macro.
 
+  + Fixed SQL syntax regression for some generated SQL statements
+    (Issue #1149).
+
 
   + Deprecated Directives
 
@@ -46,12 +49,17 @@ ChangeLog files.
 
   + Changed Directives
 
+    RedisSentinel
+      TLS support (Issue #1072)
+
     RedisServer
       Redis 6.x changed its AUTH command, due to the Redis ACL system, for
       supporting multiple users.  Thus the `RedisServer` directive now takes
       a username, as well as a password.  The Redis server version is auto-
       detected; the configured username will be ignored for Redis servers
       older than Redis 6.x.
+
+      TLS support (Issue #1072)
 
     TLSCipherSuite
       TLSv1.3 ciphersuites have different names, and are configured differently
@@ -64,3 +72,14 @@ ChangeLog files.
       removed.
 
       New `AllowWeakSecurity` TLSOption added (Issue #1048)
+
+    Wrap2Tables
+      Support for include files (Issue #1133)
+
+
+  + Developer Notes
+
+    The new `pr_pool_debug_memory2` function uses a visitor pattern to walk
+    the memory pools, and provides the pool data to the callback via
+    structure, allowing the callback to format/use the memory pool information
+    as needed, including emitting the data as JSON.
